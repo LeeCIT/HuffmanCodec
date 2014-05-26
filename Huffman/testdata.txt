@@ -1,0 +1,1306 @@
+
+
+
+package huffman;
+import java.util.Arrays;
+
+
+
+/**
+ * Deals with data at the level of individual bits.
+ * @author Lee Coakley
+ */
+public class BitStream
+{
+	private ByteVector bytes;
+	private byte       buffer;
+	private int        bits;
+	
+	
+	
+	public BitStream() {
+		bytes = new ByteVector();
+	}
+	
+	
+	
+	public BitStream( byte[] b ) {
+		bytes = new ByteVector( b );
+	}
+	
+	
+	
+	/**
+	 * Add up to 32 bits to the stream.
+	 * Bits are added in order from MSB to LSB: the order remains the same in the stream.
+	 * LSB is bit 0, bits-1 is MSB.
+	 * @param bits Specifies what portion of the int to use.  8 is byte, 16 is short, etc. 
+	 */
+	public void add( int x, int bits ) {
+		int xBits  = 32;
+		int offset = (xBits - 1) - (xBits - bits);
+		
+		for (int i=offset; i>=0; i--)
+			add( (x>>i) & 1 );
+	}
+	
+	
+	
+	/**
+	 * Add a string of bits.
+	 * If the string contains any characters other than 0 and 1, the result is undefined.
+	 */
+	public void add( String bits ) {
+		for (int i=0; i<bits.length(); i++)
+			add( bits.charAt(i) - '0' );
+	}
+	
+	
+	
+	/**
+	 * Add a single bit.
+	 */
+	public void add( int bit ) {		
+		if (bits >= 8) {
+			bytes.add( buffer );
+			bits   = 0;
+			buffer = 0;
+		}
+		
+		buffer <<= 1;
+		buffer  |= bit;
+		bits++;
+	}
+	
+	
+	
+	/**
+	 * Read up to 32 bits out of the stream, starting at the given offset in bits.
+	 * The resulting bits are stored in the rightmost portion of the return value, in the same order.
+	 * Example: get(0,16) populates the low 16 bits of the return value. 
+	 */
+	public int get( int msbBitOffset, int count ) {
+		int v    = 0;
+		int from = count - 1;
+		
+		for (int i=0; i<count; i++)
+			v |= get(msbBitOffset + i) << (from - i);
+		
+		return v;
+	}
+	
+	
+	
+	/**
+	 * Read a single bit.
+	 */
+	public int get( int index ) {
+		int  arrayIndex = (index / 8);
+		int  bitIndex   = (index % 8);
+		byte b;
+		
+		if (arrayIndex < bytes.size())
+			 b = bytes.get( arrayIndex ); 
+		else b = buffer;
+		
+		int basePos = 8 - 1;
+		return (b >> (basePos-bitIndex)) & 1;
+	}
+	
+	
+	
+	/**
+	 * Get the total number of bits in the stream.
+	 */
+	public int getBitCount() {
+		return bits + (bytes.size() * 8);
+	}
+	
+	
+	
+	/**
+	 * Get the number of bytes in the stream.
+	 * Rounds up.  9 bits means 2 bytes.
+	 */
+	public int getByteCount() {
+		int byteCount = bytes.size();
+		
+		if (bits > 0)
+			 return byteCount + 1;
+		else return byteCount;
+	}
+	
+	
+	
+	/**
+	 * Convert the bitstream to an array of bytes.
+	 * Any undefined bits in the final byte will be zero.
+	 */
+	public byte[] toArray() {
+		byte[] array = Arrays.copyOf( bytes.toArray(), getByteCount() );
+		
+		if (bits > 0) {
+			byte last = (byte) (buffer << 8-bits);
+			array[ array.length - 1 ] = last;
+		}
+		
+		return array;
+	}
+}
+
+
+
+
+
+
+
+
+
+
+package huffman;
+import java.util.Arrays;
+import java.util.Iterator;
+
+
+
+/**
+ * Simple dynamic byte array.
+ * @author Lee Coakley
+ */
+public class ByteVector implements Iterable<Byte>
+{
+	private byte[] core;
+	private int    caret;
+	
+	
+	
+	public ByteVector() {
+		core  = new byte[ 64 ];
+		caret = -1;
+	}
+	
+	
+	
+	public ByteVector( byte[] bytes ) {
+		core  = Arrays.copyOf( bytes, bytes.length );
+		caret = core.length - 1;
+	}
+	
+	
+	
+	public void add( byte b ) {
+		if (isCoreFull())
+			grow();
+		
+		core[++caret] = b;
+	}
+	
+	
+	
+	public byte get( int index ) {
+		return core[ index ];
+	}
+	
+	
+	
+	public int size() {
+		return caret + 1;
+	}
+	
+	
+	
+	public byte[] toArray() {
+		return Arrays.copyOf( core, size() );
+	}
+	
+	
+	
+	public void shrinkToFit() {
+		core  = toArray();
+		caret = core.length - 1;
+	}
+	
+	
+	
+	private boolean isCoreFull() {
+		return size() >= core.length;
+	}
+	
+	
+	
+	private void grow() {
+		core = Arrays.copyOf( core, core.length * 2 );
+	}
+	
+	
+	
+	public Iterator<Byte> iterator() {
+		return new Iterator<Byte>() {
+			private int i = -1;
+			
+			public boolean hasNext() {
+				return (i+1) < core.length;
+			}
+			
+			public Byte next() {
+				return core[++i];
+			}
+			
+			public void remove() {
+				throw new UnsupportedOperationException();
+			}
+		};
+	}
+	
+	
+	
+	
+	
+	public static void main( String[] args ) {
+		ByteVector bv = new ByteVector();
+		
+		for (int i=0; i<72; i++)
+			bv.add( (byte) i );
+		
+		for (int i=0; i<72; i++)
+			System.out.println( bv.get(i) );
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+
+
+/**
+ * Analyses the frequency distribution of an input and returns
+ * a sorted listing.
+ * @author Lee Coakley
+ */
+public class FrequencyAnalyser
+{
+	/**
+	 * Generate a frequency table from the data.
+	 */
+	public static HuffTable analyse( byte[] data ) {
+		int[] freqs = analyseFrequencies( data );
+		return genSortedFreqTable( freqs );
+	}
+	
+	
+	
+	private static int[] analyseFrequencies( byte[] bytes ) {
+		int[] freq = new int[ 256 ];
+		
+		for (byte b: bytes)
+			++freq[ b & 0xFF ];
+			
+		return freq;
+	}
+	
+	
+	
+	private static HuffTable genSortedFreqTable( int[] freqs ) {
+		HuffTable table = new HuffTable( freqs.length );
+		
+		for (short i=0; i<freqs.length; i++)
+			if (freqs[i] > 0)
+				table.add( new HuffChar( i, freqs[i] ) );
+		
+		table.sort();
+		
+		return table;
+	}
+}
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+
+
+/**
+ * A character for huffman coding.
+ * Orders by ascending frequency.
+ * @author Lee Coakley
+ */
+public class HuffChar implements Comparable<HuffChar>
+{
+	public int index; // Unsigned byte value of character
+	public int freq;  // Character's frequency of occurence
+	
+	
+	
+	public HuffChar( int index, int freq ) {
+		this.index = index;
+		this.freq  = freq;
+	}
+	
+	
+	
+	public int compareTo( HuffChar c ) {
+		return freq - c.freq;
+	}
+	
+	
+	
+	public String toString() {
+		return "" + index + "\t (" + toChar(index) + ")";
+	}
+	
+	
+	
+	private char toChar( int index ) {
+		char c = (char) index;
+		
+		if (c < 32)
+			 return ' ';
+		else return c;
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+
+
+/**
+ * Huffman codec.
+ * @author Lee Coakley
+ */
+public class HuffCoder
+{
+	public static void main( String[] args ) throws Exception {
+		byte[] data    = IO.read( "testdata.txt" );
+		byte[] encoded = encode( data    );
+		byte[] decoded = decode( encoded );
+		
+		IO.write( "huff.encoded.txt", encoded, false );
+		IO.write( "huff.decoded.txt", decoded, false );
+		
+		Util.cyclicRedundancyCheck( data, decoded );
+	}
+	
+	
+	
+	/**
+	 * Encode uncompressed data using Huffman coding.
+	 */
+	public static byte[] encode( byte[] data ) {
+		if (data.length == 0)
+			return new byte[ 0 ];
+		
+		HuffTable table = FrequencyAnalyser.analyse( data );		
+		HuffTree  tree  = new HuffTree( table );
+		
+		byte[] huffTable = HuffTable.encode( table );
+		byte[] huffCodes = tree.encode( data );
+		
+		printStats( table, tree, data, huffTable, huffCodes );
+		
+		return Util.arrayConcat( huffTable, huffCodes );
+	}
+
+
+
+	/**
+	 * Decode huffman compressed data.
+	 */
+	public static byte[] decode( byte[] data ) {
+		if (data.length == 0)
+			return new byte[ 0 ];
+		
+		HuffTable table      = new HuffTable();
+		int       byteOffset = HuffTable.decode( table, data );
+		
+		HuffTree tree = new HuffTree( table );
+		return tree.decode( data, byteOffset );
+	}
+	
+	
+	
+	private static void printStats( HuffTable table, HuffTree tree, byte[] data, byte[] huffTable, byte[] huffCodes ) {
+		table.printFrequencies();
+		tree .printCodes();
+		printSizeInfo( data, huffTable, huffCodes );
+	}
+	
+	
+	
+	private static void printSizeInfo( byte[] data, byte[] huffTable, byte[] huffCodes ) {
+		int    sizeRaw         = data.length;
+		int    sizeHuffActual  = huffCodes.length;
+		int    sizeHuffTable   = huffTable.length;
+		int    sizeHuffTotal   = sizeHuffActual + sizeHuffTable;
+		double sizeRatio       = sizeHuffTotal / (double) sizeRaw;
+		int    sizePercent     = (int) Math.round( sizeRatio * 100 );
+		
+		System.out.println( "\n\nData sizes (bytes):" );
+		System.out.println( "Original:    " + sizeRaw         );
+		System.out.println( "Coded:       " + sizeHuffActual  );
+		System.out.println( "Table:       " + sizeHuffTable   );
+		System.out.println( "Total:       " + sizeHuffTotal   );
+		System.out.println( "Size factor: " + sizePercent + "%" );
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+
+
+/**
+ * A node in the huffman tree.
+ * @author Lee Coakley
+ */
+public class HuffNode implements Comparable<HuffNode>
+{
+	public HuffChar hc;
+	public HuffNode left;
+	public HuffNode right;
+	public String   code;
+	
+	
+	
+	public HuffNode( HuffChar hc, HuffNode left, HuffNode right ) {
+		this.hc    = hc;
+		this.left  = left;
+		this.right = right;
+	}
+	
+	
+	
+	public int compareTo( HuffNode o ) {
+		return getFreqSum() - o.getFreqSum();
+	}
+	
+	
+	
+	/**
+	 * Check whether the node is a character node (leaf).
+	 */
+	public boolean hasChar() {
+		return hc != null;
+	}
+	
+	
+	
+	/**
+	 * Check if the node has a left child.
+	 */
+	public boolean hasLeft() {
+		return left != null;
+	}
+	
+	
+	
+	/**
+	 * Check if the node has a right child.
+	 */
+	public boolean hasRight() {
+		return right != null;
+	}
+	
+	
+	
+	/**
+	 * Get the sum of frequencies for the node and all its children.
+	 */
+	public int getFreqSum() {
+		int sum = 0;
+		
+		if (hasChar())  sum += hc.freq;
+		if (hasLeft())  sum += left .getFreqSum();
+		if (hasRight()) sum += right.getFreqSum();
+		
+		return sum;
+	}
+	
+	
+	
+	/**
+	 * Visit every node using the provided traverser.
+	 * Traversal is depth-first.
+	 */
+	public void traverse( Traverser<HuffNode> trav ) {
+		trav.process( this );
+		if (hasLeft())  left .traverse( trav );
+		if (hasRight()) right.traverse( trav );
+	}
+	
+	
+	
+	/**
+	 * Print out the tree.
+	 * Indentation denotes the level.
+	 */
+	public void print() {
+		System.out.println( "\n\nTree: " );
+		print( 0 );
+	}
+	
+	
+	
+	private void print( int level ) {
+		for (int i=0; i<level; i++)
+			System.out.print( "  " );
+		
+		String desc = "" + getFreqSum();
+		
+		if (hasChar())
+			desc += " (" + hc.index + ")";
+		
+		System.out.println( "+ " + desc );
+		
+		if (hasLeft())  left .print( level + 1 );
+		if (hasRight()) right.print( level + 1 );
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+
+
+
+/**
+ * A collection of Huffman codable characters.
+ * Should be kept sorted.  Call sort() after adding chars.
+ * 
+ * Data format:
+ * 		Header:
+ *  		[uint9] number of elements in freq table
+ *  		[uint5] bits per frequency
+ *  		[uint2] padding
+ *  		
+ *  	Element:
+ *  		[uint8] index
+ *  		[uint?] frequency
+ *
+ *
+ * @author Lee Coakley
+ */
+public class HuffTable implements Iterable<HuffChar>
+{
+	private static final int headerCountBits = 9;
+	private static final int headerFreqBits  = 5;
+	private static final int headerPadBits   = 2;
+	private static final int headerBits      = headerCountBits + headerFreqBits + headerPadBits;
+	private static final int elemIndexBits   = 8;
+	
+	private List<HuffChar> chars;
+	
+	
+	
+	public HuffTable() {
+		chars = new ArrayList<>();
+	}
+	
+	
+	
+	public HuffTable( int length ) {
+		chars = new ArrayList<>( length );
+	}
+	
+	
+	
+	public void add( HuffChar hc ) {
+		chars.add( hc );
+	}
+	
+	
+	
+	public HuffChar get( int index ) {
+		return chars.get( index );
+	}
+	
+	
+	
+	public int size() {
+		return chars.size();
+	}
+	
+	
+	
+	public Iterator<HuffChar> iterator() {
+		return chars.iterator();
+	}
+	
+	
+	
+	public void sort() {
+		Collections.sort( chars );
+	}
+	
+	
+	
+	/**
+	 * Serialize the table to a compact form.
+	 */
+	public static byte[] encode( HuffTable table ) {
+		BitStream bs = new BitStream();
+		
+		int count        = table.size();
+		int bitsPerIndex = elemIndexBits;
+		int bitsPerFreq  = getBitsPerFrequency( table );
+		
+		bs.add( count,       headerCountBits );
+		bs.add( bitsPerFreq, headerFreqBits  );
+		bs.add( 0,           headerPadBits   );
+		
+		for (HuffChar hc: table) {
+			bs.add( hc.index, bitsPerIndex );
+			bs.add( hc.freq,  bitsPerFreq  );
+		}
+		
+		return bs.toArray();
+	}
+	
+	
+	
+	/**
+	 * Rebuild the table from a compact form.
+	 * @return Size of the encoded table in bytes.  Use to advance read caret.
+	 */
+	public static int decode( HuffTable table, byte[] raw ) {
+		checkSize( raw );
+		
+		BitStream bs = new BitStream( raw );
+		
+		int elemCount = bs.get( 0,               headerCountBits );
+		int freqBits  = bs.get( headerCountBits, headerFreqBits  );
+		int elemBits  = elemIndexBits + freqBits;
+		int totalBits = headerBits + (elemCount * elemBits);
+		
+		checkFreqBits( freqBits );
+		
+		for (int i=0; i<elemCount; i++) {
+			int offsI = headerBits + (elemBits * i);
+			int offsF = offsI + elemIndexBits;
+			int index = bs.get( offsI, elemIndexBits );
+			int freq  = bs.get( offsF, freqBits      );
+			
+			table.add( new HuffChar( index, freq) );
+		}
+		
+		return ceilToBytes( totalBits );
+	}
+	
+	
+	
+	private static void checkSize( byte[] raw ) {
+		if (raw.length < 2)
+			throw new RuntimeException( "Bad size: " + raw.length );
+	}
+	
+	
+	
+	private static void checkFreqBits( int freqBits ) {
+		if (freqBits <= 0 || freqBits >= 32)
+			throw new RuntimeException( "Bad freq bits: " + freqBits );
+	}
+	
+	
+	
+	/**
+	 * Print out the character frequencies with a nice graph.
+	 */
+	public void printFrequencies() {
+		int lenDiv = getLengthDivider();
+		
+		System.out.print( "\n\nFrequencies:" );
+		
+		for (HuffChar hc: this) {
+			int freq = hc.freq;
+					
+			System.out.print( "\n" + hc + ": \t" + freq + "\t " );
+		
+			for (int f=0; f<freq/lenDiv; f++)
+				System.out.print( "|" );
+		}
+		
+		System.out.println();
+	}
+	
+	
+	
+	private int getLengthDivider() {
+		int fmax = 0;
+		
+		for (HuffChar hc: this)
+			fmax = Math.max( fmax, hc.freq );
+		
+		int div = fmax / 72;
+		return Math.max( div, 1 );
+	}
+	
+	
+	
+	private static int getBitsPerFrequency( HuffTable table ) {
+		int highest = table.getHighestFrequency();
+		int log2    = log2i( highest );
+		return Math.max( 1, log2 );
+	}
+	
+	
+	
+	private int getHighestFrequency() {
+		int last = size() - 1;
+		return get(last).freq;
+	}
+	
+	
+	
+	private static int log2i( int x ) {
+		double logx = Math.log( x );
+		double log2 = Math.log( 2 );
+		double log  = logx / log2;
+		return (int) Math.ceil( log );
+	}
+	
+	
+	
+	private static int ceilToBytes( int bits ) {
+		return (int) Math.ceil( bits / 8.0 );
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
+
+
+
+/**
+ * A huffman tree.
+ * Contains nodes arranged in a binary tree according to the sum of frequencies for each node.
+ * Going left is 0, going right is 1.
+ */
+public class HuffTree
+{
+	private HuffNode   root;
+	private HuffNode[] lookupTable;
+	
+	
+	
+	public HuffTree( HuffTable table ) {
+		this.root = genTree( table );
+		genCodes();
+		genLookupTable();
+	}
+	
+	
+	
+	public void print() {
+		root.print();
+	}
+	
+	
+	
+	/**
+	 * Get the prefix code for the given byte.
+	 */
+	public String getCode( byte b ) {
+		int u = b & 0xFF;
+		return lookupTable[ u ].code;
+	}
+	
+	
+	
+	/**
+	 * Get the prefix code for the given char.
+	 * @param hc
+	 * @return
+	 */
+	public String getCode( HuffChar hc ) {
+		int u = hc.index;
+		return lookupTable[ u ].code;
+	}
+	
+	
+	
+	/**
+	 * Traverse each node of the tree.
+	 */
+	public void traverse( Traverser<HuffNode> trav ) {
+		root.traverse( trav );
+	}
+	
+	
+	
+	/**
+	 * Huffman code the data.
+	 */
+	public byte[] encode( byte[] data ) {
+		BitStream bs = new BitStream();
+		
+		for (byte b: data)
+			bs.add( getCode(b) );
+		
+		return bs.toArray();
+	}
+	
+	
+	
+	/**
+	 * Decode huffman encoded data, giving back its original form.
+	 */
+	public byte[] decode( byte[] data, int byteOffs ) {
+		BitStream  bs      = new BitStream( data );
+		ByteVector out     = new ByteVector();
+		int        bitOffs = byteOffs * 8;
+		int        freqs   = root.getFreqSum();
+		
+		readPrefixes( bs, bitOffs, out, freqs );
+		
+		return out.toArray();
+	}
+	
+	
+	
+	private void readPrefixes( BitStream bs, int bitOffs, ByteVector out, int freqs ) {
+		for (int i=0; i<freqs; i++)
+			bitOffs += readPrefixFrom( bs, bitOffs, out );
+	}
+
+
+
+	private int readPrefixFrom( BitStream bs, int bitOffs, ByteVector out ) {
+		HuffNode node = root;
+		
+		for (int i=0; ; i++) {
+			int bit = bs.get( bitOffs + i );
+			
+			if (bit == 1)
+				 node = node.right;
+			else node = node.left;
+			
+			if (node.hasChar()) {
+				out.add( (byte) node.hc.index );
+				return i + 1;
+			}
+		}
+	}
+
+
+
+	private void genCodes() {
+		String str = "";
+		genCodes( root, str );
+	}
+	
+	
+	
+	private void genCodes( HuffNode node, String str ) {
+		if (node.hasChar())  node.code = str;
+		if (node.hasLeft())  genCodes( node.left,  str + "0" );
+		if (node.hasRight()) genCodes( node.right, str + "1" );
+	}
+	
+	
+	
+	private void genLookupTable() {
+		lookupTable = new HuffNode[ 256 ];
+		
+		traverse( new Traverser<HuffNode>() {
+			public void process( HuffNode node ) {
+				if (node.hasChar())
+					lookupTable[ node.hc.index ] = node;
+			}
+		});
+	}
+	
+	
+	
+	private HuffNode genTree( HuffTable table ) {
+		PriorityQueue<HuffNode> nodes = genNodePriQueue( table );
+		HuffNode root = null;
+		
+		if (nodes.size() == 1)
+			return new HuffNode( null, nodes.poll(), null ); // Has to be at least two nodes
+		
+		while (nodes.size() >= 2) {
+			HuffNode left  = nodes.poll();
+			HuffNode right = nodes.poll();
+			         root  = new HuffNode( null, left, right );
+			
+			nodes.add( root );
+		}
+		
+		if ( ! nodes.isEmpty()
+		&&     nodes.peek().hasChar())
+			throw new RuntimeException( "Tree gen failed: skipped " + nodes.peek().hc );
+		
+		return root;
+	}
+	
+	
+	
+	private PriorityQueue<HuffNode> genNodePriQueue( HuffTable table ) {
+		PriorityQueue<HuffNode> pq = new PriorityQueue<>( table.size() );
+		
+		for (HuffChar hc: table)
+			pq.add( new HuffNode(hc,null,null) );
+		
+		return pq;
+	}
+	
+	
+	
+	public void printCodes() {
+		final List<HuffNode> nodes = new ArrayList<>();
+		
+		traverse( new Traverser<HuffNode>() {
+			public void process( HuffNode node ) {
+				if (node.hasChar())
+					nodes.add( node );
+			}
+		});
+		
+		Collections.sort( nodes, new Comparator<HuffNode>() {
+			public int compare( HuffNode a, HuffNode b ) {
+				return a.code.length() - b.code.length();
+			}
+			
+		});
+		
+		System.out.println( "\n\nCodes:" );
+		for (HuffNode n: nodes)
+			System.out.println( "" + n.hc + ": \t" + n.code );
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+
+
+
+/**
+ * Provides simple IO functions.
+ * @author Lee Coakley
+ */
+public final class IO
+{
+	private IO() {}
+	
+	
+	
+	public static byte[] read( String file ) throws IOException {		
+		Path path = Paths.get( file );
+		return Files.readAllBytes( path );
+	}
+	
+	
+	
+	public static void write( String file, byte[] bytes, boolean append ) throws IOException {		
+		Path path = Paths.get( file );
+		
+		if (append)
+			 Files.write( path, bytes, StandardOpenOption.APPEND );
+		else Files.write( path, bytes );
+	}
+}
+
+
+
+
+
+
+
+package huffman;
+
+
+
+public interface Traverser<T> {
+	public void process( T obj );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package huffman;
+
+
+
+/**
+ * Misc utility functions.
+ * @author Lee Coakley
+ */
+public final class Util
+{
+	private Util() {}
+	
+	
+	
+	protected static void cyclicRedundancyCheck( byte[] data, byte[] decoded ) {
+		System.out.println();
+		
+		for (int i=0; i<data.length; i++)
+			if (data[i] - decoded[i] != 0)
+				System.out.println( "CRC fail at byte #" + i );
+		
+		if (data.length != decoded.length)
+			System.out.println( "CRC fail: Size mismatch." );
+		
+		System.out.println( "CRC OK" );
+	}
+	
+	
+	
+	protected static byte[] arrayConcat( byte[] a, byte[] b ) {
+		int    lenA = a.length;
+		int    lenB = b.length;
+		byte[] out  = new byte[ lenA + lenB ];
+		
+		System.arraycopy( a, 0, out, 0,    lenA );
+		System.arraycopy( b, 0, out, lenA, lenB );
+		
+		return out;
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
